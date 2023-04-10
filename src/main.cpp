@@ -51,11 +51,15 @@ std::string wstr2str(const std::wstring &ws) {
     return result;
 }
 
-void showData(std::vector<char> &data, int width = 32) {
+// 展示 16 进制数据
+void ShowData(char const *data, uint64_t len, int width = 32, int preWhite = 0) {
     uint64_t dpos = 0;
-    while (dpos < data.size()) {
+    while (dpos < len) {
+        for (int p = preWhite; p; p--) {
+            std::cout << " ";
+        }
         for (int p = width; p; p--) {
-            if (dpos >= data.size()) {
+            if (dpos >= len) {
                 break;
             }
             std::cout << std::uppercase << std::hex << std::setw(2)
@@ -66,7 +70,8 @@ void showData(std::vector<char> &data, int width = 32) {
     }
 }
 
-int main() {
+// 加载卷
+tamper::Ntfs LoadVolume() {
     tamper::Devices devs;
     int vol_i = 0;
     // 展示设备
@@ -89,12 +94,12 @@ int main() {
         0, devs.devs[vol_i].guidPath.size() - 1);
 
     std::vector<char> data;
-    // try {
     tamper::Ntfs disk{volumePath};
-    if (!disk.IsOpen()) {
-        // 打开失败
-        throw std::exception();
-    }
+    return disk;
+}
+
+// 显示卷信息
+void ShowVolumeInfo(tamper::Ntfs &disk) {
     std::cout << "total size: " << std::dec << disk.GetTotalSize() << std::endl;
     // 输出 $Boot 信息
     std::cout << "$Boot info:" << std::endl;
@@ -104,7 +109,6 @@ int main() {
               << disk.bootInfo.clustersPer_MFT_Record << std::endl;
     std::cout << "  Logic cluster number of MFT: " << disk.bootInfo.LCNoVCN0oMFT
               << std::endl;
-
     // 获得 MFT Areas
     auto secs = disk.DataRunsToSectorsInfo(disk.MFT_FileRecord.GetDataAttr());
     std::cout << "MFT Areas:" << std::endl;
@@ -112,81 +116,101 @@ int main() {
         std::cout << "  start: " << std::dec << i.startSecId
                   << " num: " << i.secNum << std::endl;
     }
-    // 列出所有文件名 43 CheatEngine75.exe
-    std::cout << "files:" << std::endl;
-    for (int i = 0; i < disk.FileRecordsNumber; i++) {
-        std::vector<tamper::SuccessiveSectors> req =
-            disk.GetFileRecordAreaByIndex(i);
-        tamper::Ntfs_FILE_Record rcd = disk.ReadSectors(req);
-        for (auto &p : rcd.attrs) {
-            if (p.fields.get()->length > 1000 /* p.fields.get()->attrType == tamper::NTFS_INDEX_ALLOCATION */) {
-                // tamper::TypeData_FILE_NAME *fileInfo =
-                //     (tamper::TypeData_FILE_NAME *)p.attrData.data();
-                if (true) {
-                    std::cout << "Area:" << std::dec << "[" << i << "]"
-                              << std::endl;
-                    for (auto &i : req) {
-                        std::cout << "  start: " << std::dec << i.startSecId
-                                  << " num: " << i.secNum << std::endl;
-                    }
-                    std::string filename = wstr2str(rcd.GetFileName());
-                    if (!filename.empty()) {
-                        std::cout << "  filename: \"" << filename << "\""
-                                  << std::endl;
-                    }
-                    std::cout << "  file record flags: " << std::hex
-                              << rcd.fixedFields.flags << std::endl;
-                    for (auto &o : rcd.attrs) {
-                        std::cout << "  attr type:" << std::hex
-                                  << o.fields.get()->attrType << std::endl;
-                        std::cout << "    is non-resident: " << std::dec
-                                  << (int)o.fields.get()->nonResident
-                                  << std::endl;
-                        std::cout << "    length: " << std::dec
-                                  << o.fields.get()->length << std::endl;
-                        std::cout << "    attr id: " << std::dec
-                                  << o.fields.get()->attrId << std::endl;
-                        if (o.fields.get()->nameLen) {
-                            std::cout << "    name: " << std::dec
-                                      << wstr2str(o.attrName) << std::endl;
-                        }
-                        if (o.fields.get()->attrType ==
-                            tamper::NTFS_FILE_NAME) {
-                            tamper::TypeData_FILE_NAME *fileInfo =
-                                (tamper::TypeData_FILE_NAME *)o.attrData.data();
-                            std::cout << "    flags: " << std::hex
-                                      << fileInfo->flags << std::endl;
-                        }
-                        if (o.fields.get()->attrType ==
-                            tamper::NTFS_INDEX_ALLOCATION) {
-                            tamper::NtfsAttr::NonResidentPart &nonResidentPart =
-                                (tamper::NtfsAttr::NonResidentPart &)*o.fields
-                                    .get();
-                            std::cout << "    alloc size: " << std::dec
-                                      << nonResidentPart.allocSize << std::endl;
-                            std::cout << "    real size: " << std::dec
-                                      << nonResidentPart.realSize << std::endl;
-                            std::cout << "    data runs size:" << std::dec
-                                      << nonResidentPart.length -
-                                             nonResidentPart.offToDataRuns
-                                      << std::endl;
-                            std::cout << "    offset to data runs:" << std::dec
-                                      << nonResidentPart.offToDataRuns
-                                      << std::endl;
-                        }
-                    }
-                }
-            }
+}
+
+// 显示 文件记录 详细信息
+void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx) {
+    std::vector<tamper::SuccessiveSectors> req =
+        disk.GetFileRecordAreaByIndex(idx);
+    tamper::Ntfs_FILE_Record rcd = disk.ReadSectors(req);
+    std::string filename = wstr2str(rcd.GetFileName());
+    std::cout << "FILE RECORD [" << std::dec << idx << "]" << std::endl;
+    if (!filename.empty()) {
+        std::cout << "  file name: \"" << filename << "\"" << std::endl;
+    }
+    std::cout << "  file record flags: ";
+    if (rcd.fixedFields.flags == 0) {
+        std::cout << "UNUSED ";
+    }
+    else {
+        if (rcd.fixedFields.flags & 0x01) {
+            std::cout << "EXISTS ";
+        }
+        if (rcd.fixedFields.flags & 0x02) {
+            std::cout << "DIRECTORY ";
         }
     }
+    std::cout << std::endl;
+
+    for (auto &o : rcd.attrs) {
+        std::cout << "  attr type:" << std::hex << std::uppercase
+                  << o.fields.get()->attrType << std::endl;
+        std::cout << "    is non-resident: " << std::dec
+                  << (int)o.fields.get()->nonResident << std::endl;
+        std::cout << "    length: " << std::dec << o.fields.get()->length
+                  << std::endl;
+        // std::cout << "    attr id: " << std::dec << o.fields.get()->attrId
+        //           << std::endl;
+        if (o.fields.get()->nameLen) {
+            std::cout << "    name: " << std::dec << wstr2str(o.attrName)
+                      << std::endl;
+        }
+        if (o.fields.get()->attrType == tamper::NTFS_FILE_NAME) {
+            tamper::TypeData_FILE_NAME fileInfo = tamper::NtfsDataBlock{o.attrData, nullptr};
+            std::cout << "    flags: " << std::hex << fileInfo.fileInfo.flags
+                      << std::endl;
+        }
+        if (o.fields.get()->nonResident) {
+            tamper::NtfsAttr::NonResidentPart &nonResidentPart =
+                (tamper::NtfsAttr::NonResidentPart &)*o.fields.get();
+            std::cout << "    Virtual Clusters count: "
+                      << nonResidentPart.VCN_end - nonResidentPart.VCN_beg + 1
+                      << std::endl;
+            std::cout << "    data runs: " << std::endl;
+            ShowData(o.attrData, o.attrData.len(), 16, 6);
+        }
+    }
+}
+
+// 显示 文件记录 的 16 进制数据
+void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx) {
+    uint64_t rcdIdx = idx;
+    std::vector<tamper::SuccessiveSectors> area =
+        disk.GetFileRecordAreaByIndex(rcdIdx);
+    tamper::NtfsDataBlock block = disk.ReadSectors(area);
+    tamper::Ntfs_FILE_Record trcd = block;
+    std::vector<char> data = block;
+    ShowData(&data[0], data.size());
+}
+
+int main() {
+    // 选择并加载卷
+    tamper::Ntfs disk = std::move(LoadVolume());
+    int choose = 0;
+
+    if (!disk.IsOpen()) {
+        // 打开失败
+        std::cout << "load failure!" << std::endl;
+        std::cin >> choose;
+        return 0;
+    }
+
+    // 显示卷信息
+    ShowVolumeInfo(disk);
+
+    // 列出所有文件名 51 47 big_dir
+    // std::cout << "MFT Files:" << std::endl;
+    // for (int i = 0; i < disk.FileRecordsCount; i++) {
+    //     ShowFileRecordInfo(disk, i);
+    //     getchar();
+    // }
+
     while (true) {
+        uint64_t rcdIdx;
         std::cout << "input file record index: ";
-        std::cin >> vol_i; // 258172 29_daily
-        std::vector<tamper::SuccessiveSectors> area = disk.GetFileRecordAreaByIndex(vol_i);
-        tamper::NtfsDataBlock block = disk.ReadSectors(area);
-        tamper::Ntfs_FILE_Record trcd = block;
-        data = block;
-        showData(data);
+        std::cin >> rcdIdx; // 258172 29_daily
+        ShowFileRecordHex(disk, rcdIdx);
+        ShowFileRecordInfo(disk, rcdIdx);
     }
     // }
     // catch (...) {

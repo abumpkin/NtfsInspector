@@ -52,6 +52,10 @@
         "xutility": "cpp",
         "iomanip": "cpp",
         "sstream": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "functional": "cpp",
+        "list": "cpp",
+        "unordered_map": "cpp",
+        "xhash": "cpp"
     }
 }
