@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <locale>
+#include <sstream>
 #include <string>
 
 std::wstring str2wstr(const std::string &s) {
@@ -49,6 +50,20 @@ std::string wstr2str(const std::wstring &ws) {
     ::setlocale(LC_ALL, curLocale.c_str());
 
     return result;
+}
+
+// 友好显示文件大小
+std::string FriendlyFileSize(uint64_t size) {
+    std::stringstream output;
+    double res = size;
+    const char *const units[] = {"B", "KB", "MB", "GB", "TB"};
+    int scale = 0;
+    while (res > 1024.0 && scale < 4) {
+        res /= 1024.0;
+        scale++;
+    }
+    output << std::setprecision(3) << std::fixed << res << " " << units[scale];
+    return output.str();
 }
 
 // 展示 16 进制数据
@@ -96,12 +111,13 @@ tamper::Ntfs LoadVolume() {
 
     std::vector<char> data;
 
-    return tamper::Ntfs {volumePath};
+    return tamper::Ntfs{volumePath};
 }
 
 // 显示卷信息
 void ShowVolumeInfo(tamper::Ntfs &disk) {
-    std::cout << "total size: " << std::dec << disk.GetTotalSize() << std::endl;
+    std::cout << "total size: " << std::dec
+              << FriendlyFileSize(disk.GetTotalSize()) << std::endl;
     // 输出 $Boot 信息
     std::cout << "$Boot info:" << std::endl;
     std::cout << "  sectors per cluster: "
@@ -167,6 +183,10 @@ void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx) {
             std::cout << "    Virtual Clusters count: "
                       << nonResidentPart.VCN_end - nonResidentPart.VCN_beg + 1
                       << std::endl;
+            std::cout << "    data runs size: " << std::dec
+                      << FriendlyFileSize(
+                             disk.GetDataRunsDataSize(o, o.attrData.rawData))
+                      << std::endl;
             std::cout << "    data runs: " << std::endl;
             ShowData((tamper::NtfsDataBlock)o.attrData, o.attrData.len(), 16,
                      6);
@@ -188,7 +208,7 @@ void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx) {
 int main() {
     // 选择并加载卷
     tamper::Ntfs disk = LoadVolume();
-    tamper::Ntfs disk2 = std::move(disk);
+    // tamper::Ntfs disk2 = std::move(disk);
     int choose = 0;
 
     if (!disk.IsOpen()) {

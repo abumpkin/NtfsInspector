@@ -99,7 +99,7 @@ namespace tamper {
                 new (this) NtfsDataBlock();
             }
             if (len == (uint64_t)-1) {
-                this->length = r.length - this->offset;
+                this->length = r.length - offset;
             }
         }
 
@@ -144,16 +144,17 @@ namespace tamper {
     //   二: 以下 T 为 子类类型
     //     1. 当子类需要拷贝构造时按如下模板:
     //       T(T const &r) {
-    //           NtfsStructureBase &self = *this;
-    //           self = r;
+    //           static_cast<NtfsStructureBase &>(*this) = r;
     //       };
     //     2. 当子类需要移动构造时按如下模板:
     //       T(T &&r) {
-    //           NtfsStructureBase &self = *this;
-    //           self = std::move(r);
+    //           static_cast<NtfsStructureBase &>(*this) = std::move(r);
     //       };
     //     3. 当子类需要移动赋值时按如下模板:
-    //       T & operator=(T &&r) = default;
+    //       T & operator=(T &&r) {
+    //           static_cast<NtfsStructureBase &>(*this) = std::move(r);
+    //           return *this;
+    //       };
     //     4. 子类默认会使用此基类的拷贝赋值.
     // 原因:
     //   * 当基类实现了自定义拷贝赋值函数,
@@ -166,12 +167,13 @@ namespace tamper {
         NtfsStructureBase() : valid{false} {}
         NtfsStructureBase(bool const valid) : valid{valid} {}
         NtfsStructureBase(NtfsStructureBase const &r) = delete;
-        NtfsStructureBase &operator=(NtfsStructureBase const &r) {
+        /*virtual*/ NtfsStructureBase &operator=(NtfsStructureBase const &r) {
             reinterpret_cast<bool &>(*(bool *)&valid) = r.valid;
             return this->Copy(r);
         }
         NtfsStructureBase(NtfsStructureBase &&r) = delete;
-        NtfsStructureBase &operator=(NtfsStructureBase &&r) noexcept {
+        /*virtual*/ NtfsStructureBase &
+        operator=(NtfsStructureBase &&r) noexcept {
             reinterpret_cast<bool &>(*(bool *)&valid) = r.valid;
             return this->Move(r);
         }
@@ -371,8 +373,7 @@ namespace tamper {
 
         TypeData_FILE_NAME() = default;
         TypeData_FILE_NAME(TypeData_FILE_NAME const &r) {
-            NtfsStructureBase &self = *this;
-            self = r;
+            static_cast<NtfsStructureBase &>(*this) = r;
         };
         TypeData_FILE_NAME(NtfsDataBlock const &data)
             : NtfsStructureBase(true) {
@@ -410,22 +411,21 @@ namespace tamper {
     struct TypeData_DATA : NtfsStructureBase {
         std::vector<SuccessiveSectors> sectors;
         NtfsDataBlock residentData;
+        uint64_t VCN_beg, VCN_end, dataSize;
         bool isResident;
 
         TypeData_DATA() = default;
-        // TypeData_DATA(TypeData_DATA const &r) : NtfsStructureBase(r) {
-        //     this->sectors = r.sectors;
-        //     this->residentData = r.residentData;
-        //     this->isResident = r.isResident;
-        // }
-        // TypeData_DATA &operator=(TypeData_DATA &r) {
-        //     NtfsStructureBase::operator=(r);
-        //     this->sectors = r.sectors;
-        //     this->residentData = r.residentData;
-        //     this->isResident = r.isResident;
-        // }
+        TypeData_DATA(TypeData_DATA const &r) {
+            static_cast<NtfsStructureBase &>(*this) = r;
+        }
+        TypeData_DATA &operator=(TypeData_DATA const &r) {
+            static_cast<NtfsStructureBase &>(*this) = r;
+            return *this;
+        }
         TypeData_DATA(NtfsAttr const &attr, NtfsDataBlock const &data,
                       bool isResident);
+
+        uint64_t fGetDataSize() const { return dataSize; }
 
     protected:
         virtual TypeData_DATA &Copy(NtfsStructureBase const &r) override {
@@ -434,14 +434,20 @@ namespace tamper {
             this->sectors = rr.sectors;
             this->residentData = rr.residentData;
             this->isResident = rr.isResident;
+            this->VCN_beg = rr.VCN_beg;
+            this->VCN_end = rr.VCN_end;
+            this->dataSize = rr.dataSize;
             return *this;
         }
         virtual TypeData_DATA &Move(NtfsStructureBase &r) override {
             using T = std::remove_reference<decltype(*this)>::type;
-            T &rr = (T&)r;
+            T &rr = (T &)r;
             this->sectors = std::move(rr.sectors);
             this->residentData = rr.residentData;
             this->isResident = rr.isResident;
+            this->VCN_beg = rr.VCN_beg;
+            this->VCN_end = rr.VCN_end;
+            this->dataSize = rr.dataSize;
             return *this;
         }
     };
@@ -624,7 +630,7 @@ namespace tamper {
                           public TypeData_INDEX_ROOT {
             std::shared_ptr<NtfsAttr::FixedFields> attrHeader;
             std::wstring attrName;
-            NtfsDataBlock attrData;
+            NtfsDataBlock rawData;
 
             TypeData() = default;
             // TypeData(TypeData const &r) = default;
@@ -634,7 +640,7 @@ namespace tamper {
             TypeData(NtfsAttr *pAttr, NtfsDataBlock &attrData) {
                 attrHeader = pAttr->fields;
                 attrName = pAttr->attrName;
-                this->attrData = attrData;
+                this->rawData = attrData;
                 switch (attrHeader.get()->attrType) {
                 case NTFS_STANDARD_INFOMATION:
                     (dynamic_cast<TypeData_STANDARD_INFOMATION &>(*this)) =
@@ -654,8 +660,8 @@ namespace tamper {
                 }
             }
 
-            uint64_t len() const { return attrData.len(); }
-            operator typename NtfsDataBlock const &() const { return attrData; }
+            uint64_t len() const { return rawData.len(); }
+            operator typename NtfsDataBlock const &() const { return rawData; }
         };
 
     public:
@@ -666,8 +672,7 @@ namespace tamper {
 
         NtfsAttr() = default;
         NtfsAttr(NtfsAttr const &r) {
-            NtfsStructureBase &self = *this;
-            self = r;
+            static_cast<NtfsStructureBase &>(*this) = r;
         };
 
         NtfsAttr(NtfsDataBlock const &data);
@@ -740,10 +745,17 @@ namespace tamper {
 
         Ntfs_FILE_Record() = default;
         Ntfs_FILE_Record(Ntfs_FILE_Record const &r) {
-            NtfsStructureBase &self = *this;
-            self = r;
+            static_cast<NtfsStructureBase &>(*this) = r;
         };
-        Ntfs_FILE_Record & operator=(Ntfs_FILE_Record &&r) = default;
+
+        Ntfs_FILE_Record(Ntfs_FILE_Record &&r) {
+            static_cast<NtfsStructureBase &>(*this) = std::move(r);
+        };
+
+        Ntfs_FILE_Record &operator=(Ntfs_FILE_Record &&r) noexcept {
+            static_cast<NtfsStructureBase &>(*this) = std::move(r);
+            return *this;
+        }
 
         Ntfs_FILE_Record(NtfsDataBlock const &data);
         ~Ntfs_FILE_Record() {}
@@ -891,8 +903,7 @@ namespace tamper {
         Ntfs(Ntfs const &r) = delete;
         Ntfs &operator=(Ntfs const &r) = delete;
         Ntfs(Ntfs &&r) {
-            NtfsStructureBase &selfBase = *this;
-            selfBase = std::move(r);
+            static_cast<NtfsStructureBase &>(*this) = std::move(r);
         }
 
         // Ntfs(Ntfs &&r)
@@ -907,11 +918,11 @@ namespace tamper {
         Ntfs(std::string file) : DiskReader(file), NtfsStructureBase(true) {
             try {
                 bootInfo = ReadSector(0);
-                MFT_FileRecord = NtfsDataBlock{
+                MFT_FileRecord = std::move(NtfsDataBlock{
                     DiskReader::ReadSectors(bootInfo.LCNoVCN0oMFT *
                                                 bootInfo.sectorsPerCluster,
                                             bootInfo.sectorsPerCluster),
-                    this};
+                    this});
                 FileRecordSize = MFT_FileRecord.fixedFields.allocatedSize;
                 NtfsAttr &dataAttr = MFT_FileRecord.GetDataAttr();
                 if (&dataAttr != nullptr) {
@@ -1012,6 +1023,17 @@ namespace tamper {
             return ReadSectors(GetFileRecordAreaByIndex(index));
         }
 
+        uint64_t GetDataRunsDataSize(NtfsAttr const &attr,
+                                     NtfsDataBlock &dataRuns) {
+            uint64_t sectorsTotalSize = 0;
+            std::vector<SuccessiveSectors> area =
+                DataRunsToSectorsInfo(attr, dataRuns);
+            for (auto &i : area) {
+                sectorsTotalSize += i.secNum * GetSectorSize();
+            }
+            return sectorsTotalSize;
+        }
+
     protected:
         virtual Ntfs &Copy(NtfsStructureBase const &r) override {
             return *this;
@@ -1080,11 +1102,12 @@ namespace tamper {
                      sizeof(ResidentPart));
             // 如果是 "驻留" 属性, 则获取属性的具体数据.
             attrData = TypeData{
-                this, NtfsDataBlock{typename std::vector<char>(
-                                        &data[residentPart.offToAttr],
-                                        &data[(uint64_t)residentPart.offToAttr +
-                                              residentPart.attrLen]),
-                                    data.pNtfs}};
+                this,
+                NtfsDataBlock{typename std::vector<char>(
+                                  &data[residentPart.offToAttr],
+                                  &data[(uint64_t)residentPart.offToAttr] +
+                                      residentPart.attrLen),
+                              data.pNtfs}};
             // 计算驻留部分属性长度, 因为字段中的长度可能是错的.
             residentPartLength = residentPart.offToAttr + residentPart.attrLen;
         }
@@ -1149,11 +1172,17 @@ namespace tamper {
 namespace tamper {
     TypeData_DATA::TypeData_DATA(NtfsAttr const &attr,
                                  NtfsDataBlock const &data, bool isResident)
-        : NtfsStructureBase(true) {
+        : NtfsStructureBase(true), VCN_beg(0), VCN_end(0) {
         residentData = data;
-        this->isResident = !isResident;
+        this->isResident = isResident;
+        dataSize = residentData.len();
         if (!isResident) {
+            NtfsAttr::NonResidentPart &nonRD =
+                (NtfsAttr::NonResidentPart &)*attr.fields.get();
             sectors = data.pNtfs->DataRunsToSectorsInfo(attr, data);
+            VCN_beg = nonRD.VCN_beg;
+            VCN_end = nonRD.VCN_end;
+            dataSize = nonRD.realSize;
         }
     }
 }
