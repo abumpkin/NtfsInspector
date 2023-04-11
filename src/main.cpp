@@ -52,7 +52,8 @@ std::string wstr2str(const std::wstring &ws) {
 }
 
 // 展示 16 进制数据
-void ShowData(char const *data, uint64_t len, int width = 32, int preWhite = 0) {
+void ShowData(char const *data, uint64_t len, int width = 32,
+              int preWhite = 0) {
     uint64_t dpos = 0;
     while (dpos < len) {
         for (int p = preWhite; p; p--) {
@@ -94,8 +95,8 @@ tamper::Ntfs LoadVolume() {
         0, devs.devs[vol_i].guidPath.size() - 1);
 
     std::vector<char> data;
-    tamper::Ntfs disk{volumePath};
-    return disk;
+
+    return tamper::Ntfs {volumePath};
 }
 
 // 显示卷信息
@@ -110,7 +111,7 @@ void ShowVolumeInfo(tamper::Ntfs &disk) {
     std::cout << "  Logic cluster number of MFT: " << disk.bootInfo.LCNoVCN0oMFT
               << std::endl;
     // 获得 MFT Areas
-    auto secs = disk.DataRunsToSectorsInfo(disk.MFT_FileRecord.GetDataAttr());
+    auto secs = disk.MFT_FileRecord.GetDataAttr().attrData.sectors;
     std::cout << "MFT Areas:" << std::endl;
     for (auto &i : secs) {
         std::cout << "  start: " << std::dec << i.startSecId
@@ -156,7 +157,7 @@ void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx) {
                       << std::endl;
         }
         if (o.fields.get()->attrType == tamper::NTFS_FILE_NAME) {
-            tamper::TypeData_FILE_NAME fileInfo = tamper::NtfsDataBlock{o.attrData, nullptr};
+            tamper::TypeData_FILE_NAME fileInfo = o.attrData;
             std::cout << "    flags: " << std::hex << fileInfo.fileInfo.flags
                       << std::endl;
         }
@@ -167,7 +168,8 @@ void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx) {
                       << nonResidentPart.VCN_end - nonResidentPart.VCN_beg + 1
                       << std::endl;
             std::cout << "    data runs: " << std::endl;
-            ShowData(o.attrData, o.attrData.len(), 16, 6);
+            ShowData((tamper::NtfsDataBlock)o.attrData, o.attrData.len(), 16,
+                     6);
         }
     }
 }
@@ -185,7 +187,8 @@ void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx) {
 
 int main() {
     // 选择并加载卷
-    tamper::Ntfs disk = std::move(LoadVolume());
+    tamper::Ntfs disk = LoadVolume();
+    tamper::Ntfs disk2 = std::move(disk);
     int choose = 0;
 
     if (!disk.IsOpen()) {

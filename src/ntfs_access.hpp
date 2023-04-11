@@ -28,8 +28,10 @@ namespace tamper {
         NTFS_LOGGED_UTILITY_STREAM = 0x100
     };
 
-    struct TypeData;
-    struct TypeDataBase;
+    struct NtfsIndexEntry;
+    struct NtfsIndexRecord;
+
+    struct NtfsStructureBase;
     struct TypeData_STANDARD_INFOMATION;
     struct TypeData_FILE_NAME;
     struct TypeData_DATA;
@@ -55,7 +57,18 @@ namespace tamper {
         Ntfs *const pNtfs;
         NtfsDataBlock()
             : pVector(), pData(nullptr), length(0), offset(0), pNtfs(nullptr){};
-        NtfsDataBlock(NtfsDataBlock const &r) = default;
+        NtfsDataBlock(NtfsDataBlock const &r)
+            : offset(r.offset), pData(r.pData), pNtfs(r.pNtfs) {
+            this->pVector = r.pVector;
+            this->length = r.length;
+        }
+
+        NtfsDataBlock &operator=(NtfsDataBlock const &r) {
+            NtfsDataBlock temp = r;
+            this->~NtfsDataBlock();
+            new (this) NtfsDataBlock(temp);
+            return *this;
+        }
         // 拷贝 r 的数据
         NtfsDataBlock(std::vector<char> const &r, Ntfs *pNtfs)
             : pData{(pVector = std::make_shared<std::vector<char>>(r))
@@ -86,14 +99,8 @@ namespace tamper {
                 new (this) NtfsDataBlock();
             }
             if (len == (uint64_t)-1) {
-                this->length = r.pVector.get()->size() - offset;
+                this->length = r.length - this->offset;
             }
-        }
-
-        NtfsDataBlock &operator=(NtfsDataBlock const &r) {
-            this->~NtfsDataBlock();
-            new (this) NtfsDataBlock(r);
-            return *this;
         }
 
         char &operator[](std::ptrdiff_t idx) const {
@@ -116,22 +123,118 @@ namespace tamper {
         uint64_t len() const { return length; }
     };
 
-    struct TypeDataBase {
+    // 子类要求:
+    //   一: 子类必须重写 Copy(), Move(), 以下 T 为子类类型:
+    //     1. Copy() 模板:
+    //       virtual T &Copy(T const &r) override {
+    //         using TT = std::remove_reference<decltype(*this)>::type;
+    //         TT const &rr = (TT const &)r;
+    //         this->xxx = rr.xxx;
+    //         ...
+    //         return *this;
+    //       }
+    //     2. Move() 模板:
+    //       virtual T &Move(T &r) override {
+    //         using TT = std::remove_reference<decltype(*this)>::type;
+    //         TT &rr = (TT &)r;
+    //         this->xxx = std::move(rr.xxx);
+    //         ...
+    //         return *this;
+    //       }
+    //   二: 以下 T 为 子类类型
+    //     1. 当子类需要拷贝构造时按如下模板:
+    //       T(T const &r) {
+    //           NtfsStructureBase &self = *this;
+    //           self = r;
+    //       };
+    //     2. 当子类需要移动构造时按如下模板:
+    //       T(T &&r) {
+    //           NtfsStructureBase &self = *this;
+    //           self = std::move(r);
+    //       };
+    //     3. 当子类需要移动赋值时按如下模板:
+    //       T & operator=(T &&r) = default;
+    //     4. 子类默认会使用此基类的拷贝赋值.
+    // 原因:
+    //   * 当基类实现了自定义拷贝赋值函数,
+    //   子类的默认拷贝赋值函数只是简单的调用基类的自定义拷贝赋值函数.
+    //   * 当基类实现了自定义拷贝构造函数,
+    //   子类的默认拷贝构造函数只是简单的调用基类的自定义拷贝构造函数.
+    struct NtfsStructureBase {
         // 此对象数据是否有效
         bool const valid;
-        TypeDataBase() : valid{false} {}
-        TypeDataBase(bool const valid) : valid{valid} {}
-        virtual ~TypeDataBase() {}
+        NtfsStructureBase() : valid{false} {}
+        NtfsStructureBase(bool const valid) : valid{valid} {}
+        NtfsStructureBase(NtfsStructureBase const &r) = delete;
+        NtfsStructureBase &operator=(NtfsStructureBase const &r) {
+            reinterpret_cast<bool &>(*(bool *)&valid) = r.valid;
+            return this->Copy(r);
+        }
+        NtfsStructureBase(NtfsStructureBase &&r) = delete;
+        NtfsStructureBase &operator=(NtfsStructureBase &&r) noexcept {
+            reinterpret_cast<bool &>(*(bool *)&valid) = r.valid;
+            return this->Move(r);
+        }
+        virtual ~NtfsStructureBase() {
+            reinterpret_cast<bool &>(*(bool *)&valid) = false;
+        }
 
     protected:
-        void Reset() {
-            this->~TypeDataBase();
-            new (this) TypeDataBase();
+        virtual NtfsStructureBase &Copy(NtfsStructureBase const &r) = 0;
+        virtual NtfsStructureBase &Move(NtfsStructureBase &r) = 0;
+
+        virtual void Reset() {
+            reinterpret_cast<bool &>(*(bool *)&valid) = false;
             errno = 0;
         }
     };
 
-    struct TypeData_STANDARD_INFOMATION : TypeDataBase {
+    struct NtfsIndexEntry : NtfsStructureBase {
+        enum INDEX_ENTRY_FLAGS {
+            // 标志这个 索引项 指向下一个子 索引节点.
+            FLAG_IE_POINT_TO_SUBNODE = 0x01,
+            // 标志这个 索引项 是 索引记录 里一系列 索引项 的最后一项.
+            FLAG_LAST_ENTRY_IN_THE_NODE = 0x01,
+        };
+
+#pragma pack(push, 1)
+        struct {
+            // 文件引用 (前 6 字节是 文件记录号, 后 2 字节是序列号 seqNumber,
+            // 用于校验)
+            uint64_t fileReference;
+            // 整个 索引项 的长度 (单位: 字节)
+            uint16_t lengthOfIE;
+            // 流(stream) 的长度 (单位: 字节)
+            uint16_t lengthOfStream;
+            // 标志
+            uint8_t flags;
+            // 填充, 用于 8 字节对齐
+            uint8_t padding[3];
+        } entryHeader;
+#pragma pack(pop)
+
+        // 索引项 的流, 包含此 索引项 所指向的 文件记录里被索引属性的
+        // 属性数据(不包含标准属性头).
+        NtfsDataBlock stream;
+
+    protected:
+        virtual NtfsIndexEntry &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->entryHeader = rr.entryHeader;
+            this->stream = rr.stream;
+            return *this;
+        }
+        virtual NtfsIndexEntry &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->entryHeader = rr.entryHeader;
+            this->stream = rr.stream;
+            return *this;
+        }
+    };
+
+    struct TypeData_STANDARD_INFOMATION : NtfsStructureBase {
         enum DOS_FILE_PERMISSIONS {
             DOS_FILE_PERMISSION_READ_ONLY = 0x0001,
             DOS_FILE_PERMISSION_HIDDEN = 0x0002,
@@ -179,8 +282,17 @@ namespace tamper {
 #pragma pack(pop)
 
         TypeData_STANDARD_INFOMATION() = default;
+        // TypeData_STANDARD_INFOMATION(TypeData_STANDARD_INFOMATION const &r)
+        //     : NtfsStructureBase(r) {
+        //     this->info = r.info;
+        // };
+        // TypeData_STANDARD_INFOMATION &
+        // operator=(TypeData_STANDARD_INFOMATION const &r) {
+        //     NtfsStructureBase::operator=(r);
+        //     this->info = r.info;
+        // }
         TypeData_STANDARD_INFOMATION(NtfsDataBlock const &data)
-            : TypeDataBase(true) {
+            : NtfsStructureBase(true) {
             if (data.len() < sizeof(info)) {
                 Reset();
                 return;
@@ -191,9 +303,25 @@ namespace tamper {
                 return;
             }
         }
+
+    protected:
+        virtual TypeData_STANDARD_INFOMATION &
+        Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->info = rr.info;
+            return *this;
+        }
+        virtual TypeData_STANDARD_INFOMATION &
+        Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->info = rr.info;
+            return *this;
+        }
     };
 
-    struct TypeData_FILE_NAME : TypeDataBase {
+    struct TypeData_FILE_NAME : NtfsStructureBase {
         enum FILE_FLAGS {
             FILE_FLAG_READ_ONLY = 0x0001,
             FILE_FLAG_HIDDEN = 0x0002,
@@ -242,7 +370,12 @@ namespace tamper {
         std::wstring filename;
 
         TypeData_FILE_NAME() = default;
-        TypeData_FILE_NAME(NtfsDataBlock const &data) : TypeDataBase(true) {
+        TypeData_FILE_NAME(TypeData_FILE_NAME const &r) {
+            NtfsStructureBase &self = *this;
+            self = r;
+        };
+        TypeData_FILE_NAME(NtfsDataBlock const &data)
+            : NtfsStructureBase(true) {
             if (data.len() < sizeof(fileInfo)) {
                 Reset();
                 return;
@@ -256,18 +389,64 @@ namespace tamper {
             filename.assign((wchar_t *)&data[sizeof(fileInfo)],
                             fileInfo.filenameLen);
         }
+
+    protected:
+        virtual TypeData_FILE_NAME &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->fileInfo = rr.fileInfo;
+            this->filename = rr.filename;
+            return *this;
+        }
+        virtual TypeData_FILE_NAME &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->fileInfo = rr.fileInfo;
+            this->filename = rr.filename;
+            return *this;
+        }
     };
 
-    struct TypeData_DATA : TypeDataBase {
+    struct TypeData_DATA : NtfsStructureBase {
         std::vector<SuccessiveSectors> sectors;
         NtfsDataBlock residentData;
         bool isResident;
 
         TypeData_DATA() = default;
-        TypeData_DATA(NtfsAttr const &attr);
+        // TypeData_DATA(TypeData_DATA const &r) : NtfsStructureBase(r) {
+        //     this->sectors = r.sectors;
+        //     this->residentData = r.residentData;
+        //     this->isResident = r.isResident;
+        // }
+        // TypeData_DATA &operator=(TypeData_DATA &r) {
+        //     NtfsStructureBase::operator=(r);
+        //     this->sectors = r.sectors;
+        //     this->residentData = r.residentData;
+        //     this->isResident = r.isResident;
+        // }
+        TypeData_DATA(NtfsAttr const &attr, NtfsDataBlock const &data,
+                      bool isResident);
+
+    protected:
+        virtual TypeData_DATA &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->sectors = rr.sectors;
+            this->residentData = rr.residentData;
+            this->isResident = rr.isResident;
+            return *this;
+        }
+        virtual TypeData_DATA &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T&)r;
+            this->sectors = std::move(rr.sectors);
+            this->residentData = rr.residentData;
+            this->isResident = rr.isResident;
+            return *this;
+        }
     };
 
-    struct TypeData_INDEX_ROOT : TypeDataBase {
+    struct TypeData_INDEX_ROOT : NtfsStructureBase {
 #pragma pack(push, 1)
         struct {
             // 索引的属性类型, 即对什么类型的属性进行索引. 名为 "$I30" 的索引对
@@ -283,12 +462,15 @@ namespace tamper {
             // 用于 8 字节对齐
             uint8_t padding[3];
         } indexRoot;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
         struct {
             // 到第一个 索引项(Index Entry) 的偏移.
             uint32_t offToFirstIE;
-            // 之后一系列 索引项 的总大小
+            // 之后一系列 索引项 的总大小 + 此头部的大小
             uint32_t totalSizeOfIEs;
-            // 之后一系列 索引项 的分配大小
+            // 之后一系列 索引项 的分配大小, 包含此头部的大小
             uint32_t allocatedSizeOfIEs;
             // 标志. 0x00 表示小索引(索引内容只在 $INDEX_ROOT); 0x01
             // 表示大索引(额外索引内容存放在 $INDEX_ALLOCATION).
@@ -299,10 +481,11 @@ namespace tamper {
 #pragma pack(pop)
 
         // 索引项 数据
-        std::vector<char> indexEntries;
+        NtfsDataBlock indexEntries;
 
         TypeData_INDEX_ROOT() = default;
-        TypeData_INDEX_ROOT(NtfsDataBlock const &data) : TypeDataBase(true) {
+        TypeData_INDEX_ROOT(NtfsDataBlock const &data)
+            : NtfsStructureBase(true) {
             if (data.len() < sizeof(indexRoot) + sizeof(indexHeader)) {
                 Reset();
                 return;
@@ -313,19 +496,32 @@ namespace tamper {
                 Reset();
                 return;
             }
-            NtfsDataBlock recordData{data, sizeof(indexRoot),
-                                     data.len() - sizeof(indexRoot)};
+            NtfsDataBlock recordData{data, sizeof(indexRoot)};
             errno = memcpy_s(&indexHeader, sizeof(indexHeader), &recordData[0],
                              sizeof(indexHeader));
-            if (errno ||
-                indexHeader.offToFirstIE + indexHeader.allocatedSizeOfIEs >
-                    recordData.len()) {
+            if (errno || indexHeader.allocatedSizeOfIEs > recordData.len()) {
                 Reset();
                 return;
             }
-            indexEntries.assign(&recordData[indexHeader.offToFirstIE],
-                                &recordData[indexHeader.offToFirstIE +
-                                            indexHeader.allocatedSizeOfIEs]);
+            indexEntries = NtfsDataBlock{recordData, indexHeader.offToFirstIE};
+        }
+
+    protected:
+        virtual TypeData_INDEX_ROOT &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->indexRoot = rr.indexRoot;
+            this->indexHeader = rr.indexHeader;
+            this->indexEntries = rr.indexEntries;
+            return *this;
+        }
+        virtual TypeData_INDEX_ROOT &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->indexRoot = rr.indexRoot;
+            this->indexHeader = rr.indexHeader;
+            this->indexEntries = rr.indexEntries;
+            return *this;
         }
     };
 
@@ -367,7 +563,8 @@ namespace tamper {
         }
     };
 #pragma pack(pop)
-    class NtfsAttr {
+
+    class NtfsAttr : public NtfsStructureBase {
     public:
 #pragma pack(push, 1)
         struct FixedFields {
@@ -420,31 +617,81 @@ namespace tamper {
             uint64_t initializedDataSizeOfTheStream;
         };
 #pragma pack(pop)
+
+        struct TypeData : public TypeData_STANDARD_INFOMATION,
+                          public TypeData_FILE_NAME,
+                          public TypeData_DATA,
+                          public TypeData_INDEX_ROOT {
+            std::shared_ptr<NtfsAttr::FixedFields> attrHeader;
+            std::wstring attrName;
+            NtfsDataBlock attrData;
+
+            TypeData() = default;
+            // TypeData(TypeData const &r) = default;
+            // TypeData &operator=(TypeData const &r) = default;
+            // TypeData(TypeData &&r) = default;
+            // TypeData &operator=(TypeData &&r) = default;
+            TypeData(NtfsAttr *pAttr, NtfsDataBlock &attrData) {
+                attrHeader = pAttr->fields;
+                attrName = pAttr->attrName;
+                this->attrData = attrData;
+                switch (attrHeader.get()->attrType) {
+                case NTFS_STANDARD_INFOMATION:
+                    (dynamic_cast<TypeData_STANDARD_INFOMATION &>(*this)) =
+                        attrData;
+                    break;
+                case NTFS_FILE_NAME:
+                    (dynamic_cast<TypeData_FILE_NAME &>(*this)) = attrData;
+                    break;
+                case NTFS_DATA:
+                    (dynamic_cast<TypeData_DATA &>(*this)) = {
+                        *pAttr, attrData, !attrHeader.get()->nonResident};
+                case NTFS_INDEX_ROOT:
+                    (dynamic_cast<TypeData_INDEX_ROOT &>(*this)) = attrData;
+
+                default:
+                    break;
+                }
+            }
+
+            uint64_t len() const { return attrData.len(); }
+            operator typename NtfsDataBlock const &() const { return attrData; }
+        };
+
+    public:
         std::shared_ptr<FixedFields> fields;
         std::wstring attrName;
         // 如果是 "非驻留" 属性, 则储存 data runs
-        NtfsDataBlock attrData;
-        // 属性不正常
-        bool badAttr;
+        TypeData attrData;
 
         NtfsAttr() = default;
+        NtfsAttr(NtfsAttr const &r) {
+            NtfsStructureBase &self = *this;
+            self = r;
+        };
+
         NtfsAttr(NtfsDataBlock const &data);
 
-        bool IsBad() const { return badAttr; }
-    };
-
-    struct TypeData : public TypeData_FILE_NAME, public TypeData_INDEX_ROOT {
-        std::shared_ptr<NtfsAttr::FixedFields> attrHeader;
-        std::wstring attrName;
-
-        TypeData(NtfsAttr *attr) {
-            attrHeader = attr->fields;
-            attrName = attr->attrName;
-            // TODO: 根据类型初始化对应数据
+    protected:
+        virtual NtfsAttr &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->fields = rr.fields;
+            this->attrName = rr.attrName;
+            this->attrData = rr.attrData;
+            return *this;
+        }
+        virtual NtfsAttr &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->fields = std::move(rr.fields);
+            this->attrName = std::move(rr.attrName);
+            this->attrData = std::move(rr.attrData);
+            return *this;
         }
     };
 
-    class Ntfs_FILE_Record {
+    class Ntfs_FILE_Record : public NtfsStructureBase {
     public:
         enum FLAGS {
             FILE_RECORD_IN_USE = 0x01,
@@ -492,27 +739,20 @@ namespace tamper {
         std::vector<NtfsAttr> attrs;
 
         Ntfs_FILE_Record() = default;
-        Ntfs_FILE_Record(Ntfs_FILE_Record const &r) = default;
-        Ntfs_FILE_Record(Ntfs_FILE_Record &&r) {
-            fixedFields = r.fixedFields;
-            USN = r.USN;
-            USA = std::move(r.USA);
-            attrs = std::move(r.attrs);
-        }
-        Ntfs_FILE_Record(NtfsDataBlock const &data);
+        Ntfs_FILE_Record(Ntfs_FILE_Record const &r) {
+            NtfsStructureBase &self = *this;
+            self = r;
+        };
+        Ntfs_FILE_Record & operator=(Ntfs_FILE_Record &&r) = default;
 
-        Ntfs_FILE_Record &operator=(NtfsDataBlock const &data) {
-            this->~Ntfs_FILE_Record();
-            new (this) Ntfs_FILE_Record(data);
-            return *this;
-        }
+        Ntfs_FILE_Record(NtfsDataBlock const &data);
         ~Ntfs_FILE_Record() {}
 
         std::wstring GetFileName() {
             std::wstring filename;
             for (auto const &p : attrs) {
                 if (p.fields.get()->attrType == tamper::NTFS_FILE_NAME) {
-                    tamper::TypeData_FILE_NAME fn = p.attrData;
+                    tamper::TypeData_FILE_NAME fn = (NtfsDataBlock)p.attrData;
                     filename = fn.filename;
                     return filename;
                 }
@@ -528,6 +768,26 @@ namespace tamper {
                 }
             }
             return *(NtfsAttr *)nullptr;
+        }
+
+    protected:
+        virtual Ntfs_FILE_Record &Copy(NtfsStructureBase const &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T const &rr = (T const &)r;
+            this->fixedFields = rr.fixedFields;
+            this->USN = rr.USN;
+            this->USA = rr.USA;
+            this->attrs = rr.attrs;
+            return *this;
+        }
+        virtual Ntfs_FILE_Record &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            this->fixedFields = rr.fixedFields;
+            this->USN = rr.USN;
+            this->USA = std::move(rr.USA);
+            this->attrs = std::move(rr.attrs);
+            return *this;
         }
     };
 
@@ -559,7 +819,7 @@ namespace tamper {
         static uint64_t ParseDataRuns(
             NtfsDataBlock const &data,
             std::function<bool(uint64_t lcn, uint64_t num)> callback) {
-            uint32_t pos = 0;
+            uint64_t pos = 0;
             uint64_t LCN = 0;
             struct {
                 uint8_t sizeOfLengthField : 4;
@@ -614,12 +874,12 @@ namespace tamper {
         }
     };
 
-    class Ntfs : public DiskReader {
+    class Ntfs : public DiskReader, public NtfsStructureBase {
     public:
         NtfsBoot bootInfo;
         Ntfs_FILE_Record MFT_FileRecord;
         // 单位: 字节
-        uint32_t FILE_RecordSize;
+        uint32_t FileRecordSize;
         // MFT 表中文件记录的数量
         uint32_t FileRecordsCount;
 
@@ -628,14 +888,23 @@ namespace tamper {
         }
 
         Ntfs() = default;
-        Ntfs(Ntfs &&r)
-            : DiskReader((DiskReader &&) r), MFT_FileRecord{
-                                                 std::move(r.MFT_FileRecord)} {
-            bootInfo = r.bootInfo;
-            FILE_RecordSize = r.FILE_RecordSize;
-            FileRecordsCount = r.FileRecordsCount;
+        Ntfs(Ntfs const &r) = delete;
+        Ntfs &operator=(Ntfs const &r) = delete;
+        Ntfs(Ntfs &&r) {
+            NtfsStructureBase &selfBase = *this;
+            selfBase = std::move(r);
         }
-        Ntfs(std::string file) : DiskReader(file) {
+
+        // Ntfs(Ntfs &&r)
+        //     : DiskReader((DiskReader &&) r), MFT_FileRecord{
+        //                                          std::move(r.MFT_FileRecord)}
+        //                                          {
+        //     bootInfo = r.bootInfo;
+        //     FileRecordSize = r.FileRecordSize;
+        //     FileRecordsCount = r.FileRecordsCount;
+        // }
+        // Ntfs &operator=(Ntfs &&r) = delete;
+        Ntfs(std::string file) : DiskReader(file), NtfsStructureBase(true) {
             try {
                 bootInfo = ReadSector(0);
                 MFT_FileRecord = NtfsDataBlock{
@@ -643,7 +912,7 @@ namespace tamper {
                                                 bootInfo.sectorsPerCluster,
                                             bootInfo.sectorsPerCluster),
                     this};
-                FILE_RecordSize = MFT_FileRecord.fixedFields.allocatedSize;
+                FileRecordSize = MFT_FileRecord.fixedFields.allocatedSize;
                 NtfsAttr &dataAttr = MFT_FileRecord.GetDataAttr();
                 if (&dataAttr != nullptr) {
                     if (dataAttr.fields.get()->nonResident) {
@@ -651,18 +920,20 @@ namespace tamper {
                             static_cast<NtfsAttr::NonResidentPart &>(
                                 *dataAttr.fields.get());
                         FileRecordsCount =
-                            nonResidentPart.allocSize / FILE_RecordSize;
+                            nonResidentPart.allocSize / FileRecordSize;
                     }
                 }
             }
             catch (std::exception &e) {
                 memset(&bootInfo, 0, sizeof(NtfsBoot));
+                Reset();
                 return;
             }
         }
 
         std::vector<SuccessiveSectors>
-        DataRunsToSectorsInfo(NtfsAttr const &attr) {
+        DataRunsToSectorsInfo(NtfsAttr const &attr,
+                              NtfsDataBlock const &dataRuns) {
             // 判断是否是 "非驻留" 属性, 如果不是则抛出异常, 只有 "非驻留"
             // 属性才有 data runs.
             if (!attr.fields.get()->nonResident) {
@@ -684,7 +955,7 @@ namespace tamper {
                 return false;
             };
             uint64_t dataRunsLen =
-                NtfsDataRuns::ParseDataRuns(attr.attrData, callback);
+                NtfsDataRuns::ParseDataRuns(dataRuns, callback);
             if (VC_len) {
                 throw std::runtime_error("parse data runs failure!");
             }
@@ -728,10 +999,10 @@ namespace tamper {
 
         std::vector<SuccessiveSectors>
         GetFileRecordAreaByIndex(uint32_t index) {
-            uint32_t secNum = FILE_RecordSize / bootInfo.bytesPerSector;
+            uint32_t secNum = FileRecordSize / bootInfo.bytesPerSector;
             uint32_t vsn = index * secNum;
             std::vector<SuccessiveSectors> availableArea =
-                DataRunsToSectorsInfo(MFT_FileRecord.GetDataAttr());
+                MFT_FileRecord.GetDataAttr().attrData.sectors;
             std::vector<SuccessiveSectors> requiredArea =
                 VSN_To_LSN(availableArea, vsn, secNum);
             return requiredArea;
@@ -740,12 +1011,28 @@ namespace tamper {
         NtfsDataBlock GetFileRecordByIndex(uint32_t index) {
             return ReadSectors(GetFileRecordAreaByIndex(index));
         }
+
+    protected:
+        virtual Ntfs &Copy(NtfsStructureBase const &r) override {
+            return *this;
+        }
+        virtual Ntfs &Move(NtfsStructureBase &r) override {
+            using T = std::remove_reference<decltype(*this)>::type;
+            T &rr = (T &)r;
+            new (this) DiskReader(std::move((DiskReader &&) rr));
+            this->bootInfo = rr.bootInfo;
+            this->MFT_FileRecord = std::move(rr.MFT_FileRecord);
+            this->FileRecordsCount = rr.FileRecordsCount;
+            this->FileRecordSize = rr.FileRecordSize;
+            return *this;
+        }
     };
 }
 
 // NtfsAttr 定义
 namespace tamper {
-    NtfsAttr::NtfsAttr(NtfsDataBlock const &data) : attrData{}, badAttr{false} {
+    NtfsAttr::NtfsAttr(NtfsDataBlock const &data)
+        : attrData{}, NtfsStructureBase{true} {
         struct FixedFields fixedFields;
         // 属性的驻留部分长度
         uint32_t residentPartLength;
@@ -755,7 +1042,7 @@ namespace tamper {
         if (fixedFields.nonResident > 1 ||
             fixedFields.attrType > NTFS_LOGGED_UTILITY_STREAM) {
             fields = std::make_shared<FixedFields>(fixedFields);
-            badAttr = true;
+            Reset();
             return;
         }
         // 如果是 "具名属性", 则进行名称赋值.
@@ -772,12 +1059,15 @@ namespace tamper {
             memcpy_s(fields.get(), sizeof(NonResidentPart), &data[0],
                      sizeof(NonResidentPart));
             // 获取 data runs, 以 0x00 结尾.
-            attrData = NtfsDataBlock{
-                NtfsDataRuns::GetDataRuns(
-                    NtfsDataBlock{data, nonResidentPart.offToDataRuns,
-                                  data.len() - nonResidentPart.offToDataRuns},
-                    nonResidentPart.VCN_end - nonResidentPart.VCN_beg + 1ull),
-                data.pNtfs};
+            attrData = TypeData{
+                this, NtfsDataBlock{
+                          NtfsDataRuns::GetDataRuns(
+                              NtfsDataBlock{data, nonResidentPart.offToDataRuns,
+                                            data.len() -
+                                                nonResidentPart.offToDataRuns},
+                              nonResidentPart.VCN_end -
+                                  nonResidentPart.VCN_beg + 1ull),
+                          data.pNtfs}};
             // 计算驻留部分属性长度, 因为字段中的长度可能是错的.
             residentPartLength = attrData.len() + nonResidentPart.offToDataRuns;
         }
@@ -789,11 +1079,12 @@ namespace tamper {
             memcpy_s(fields.get(), sizeof(ResidentPart), &data[0],
                      sizeof(ResidentPart));
             // 如果是 "驻留" 属性, 则获取属性的具体数据.
-            attrData = NtfsDataBlock{
-                typename std::vector<char>(
-                    &data[residentPart.offToAttr],
-                    &data[residentPart.offToAttr + residentPart.attrLen]),
-                data.pNtfs};
+            attrData = TypeData{
+                this, NtfsDataBlock{typename std::vector<char>(
+                                        &data[residentPart.offToAttr],
+                                        &data[(uint64_t)residentPart.offToAttr +
+                                              residentPart.attrLen]),
+                                    data.pNtfs}};
             // 计算驻留部分属性长度, 因为字段中的长度可能是错的.
             residentPartLength = residentPart.offToAttr + residentPart.attrLen;
         }
@@ -809,25 +1100,29 @@ namespace tamper {
 
 // Ntfs_FILE_Record 定义
 namespace tamper {
-    Ntfs_FILE_Record::Ntfs_FILE_Record(NtfsDataBlock const &data) {
+    Ntfs_FILE_Record::Ntfs_FILE_Record(NtfsDataBlock const &data)
+        : NtfsStructureBase(true) {
         memcpy_s(&fixedFields, sizeof(fixedFields), &data[0],
                  sizeof(fixedFields));
         if (memcmp(fixedFields.magicNumber, "FILE", 4)) {
+            Reset();
             return;
         }
-        if (fixedFields.offsetToUS + fixedFields.sizeInWordOfUSN * 2 + 2 >=
+        if ((uint64_t)fixedFields.offsetToUS +
+                (uint64_t)fixedFields.sizeInWordOfUSN * 2 + 2 >=
             data.len()) {
+            Reset();
             return;
         }
         USN = *(uint16_t *)(&data[fixedFields.offsetToUS]);
-        USA.resize((fixedFields.sizeInWordOfUSN - 1) << 1);
-        memcpy_s(USA.data(), USA.size(), &data[fixedFields.offsetToUS + 2],
-                 USA.size());
+        USA.resize(((uint64_t)fixedFields.sizeInWordOfUSN - 1) << 1);
+        memcpy_s(USA.data(), USA.size(),
+                 &data[(uint64_t)fixedFields.offsetToUS + 2], USA.size());
         // 进行数据修正
         uint16_t &sectorSize = data.pNtfs->bootInfo.bytesPerSector;
-        for (int i = 0; i < (USA.size() >> 1); i++) {
-            memcpy_s(&data[sectorSize * i + (sectorSize - 2)], 2, &USA[i << 1],
-                     2);
+        for (uint64_t i = 0; i < (USA.size() >> 1); i++) {
+            memcpy_s(&data[(uint64_t)sectorSize * i + (sectorSize - 2)], 2,
+                     &USA[i << 1], 2);
         }
 
         // 截取属性数据
@@ -839,11 +1134,9 @@ namespace tamper {
         uint64_t pos = 0;
         while (pos + sizeof(NtfsAttr::FixedFields) < attrsData.len()) {
             // std::cout << "attr load beg" << std::endl;
-            t = NtfsDataBlock{attrsData, pos,
-                              fixedFields.realSize -
-                                  fixedFields.offToFirstAttr - pos};
+            t = NtfsDataBlock{attrsData, pos};
             pos += t.fields.get()->length;
-            if (t.fields.get()->length == 0 || t.IsBad()) {
+            if (t.fields.get()->length == 0 || !t.valid) {
                 break;
             }
             attrs.push_back(t);
@@ -854,11 +1147,13 @@ namespace tamper {
 
 // TypeData_DATA 定义
 namespace tamper {
-    TypeData_DATA::TypeData_DATA(NtfsAttr const &attr) : TypeDataBase(true) {
-        residentData = attr.attrData;
-        this->isResident = !attr.fields.get()->nonResident;
+    TypeData_DATA::TypeData_DATA(NtfsAttr const &attr,
+                                 NtfsDataBlock const &data, bool isResident)
+        : NtfsStructureBase(true) {
+        residentData = data;
+        this->isResident = !isResident;
         if (!isResident) {
-            sectors = attr.attrData.pNtfs->DataRunsToSectorsInfo(attr);
+            sectors = data.pNtfs->DataRunsToSectorsInfo(attr, data);
         }
     }
 }

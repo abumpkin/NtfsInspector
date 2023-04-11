@@ -24,6 +24,25 @@ namespace tamper {
 
     public:
         DiskReader() = default;
+
+        DiskReader(DiskReader const &r) = delete;
+
+        DiskReader &operator=(DiskReader const &r) = delete;
+
+        DiskReader(DiskReader &&r) {
+            fh = r.fh;
+            error = r.error;
+            diskInfo = r.diskInfo;
+            sectorCache = r.sectorCache;
+            r.fh = INVALID_HANDLE_VALUE;
+            r.sectorCache = nullptr;
+        }
+
+        DiskReader &operator=(DiskReader &&r) {
+            this->~DiskReader();
+            new (this) DiskReader(std::move(r));
+        }
+
         DiskReader(std::string file) : diskInfo{0} {
             sectorCache = nullptr;
             fh = CreateFileA(file.c_str(), GENERIC_READ | GENERIC_WRITE,
@@ -36,14 +55,7 @@ namespace tamper {
             GetDiskSpaceInformationA((file + "\\").c_str(), &diskInfo);
             sectorCache = new char[diskInfo.BytesPerSector];
         }
-        DiskReader(DiskReader && r) {
-            fh = r.fh;
-            error = r.error;
-            diskInfo = r.diskInfo;
-            sectorCache = r.sectorCache;
-            r.fh = INVALID_HANDLE_VALUE;
-            r.sectorCache = nullptr;
-        }
+
         ~DiskReader() {
             if (fh != INVALID_HANDLE_VALUE) {
                 CloseHandle(fh);
