@@ -67,22 +67,54 @@ std::string FriendlyFileSize(uint64_t size) {
 }
 
 // 展示 16 进制数据
-void ShowData(char const *data, uint64_t len, int width = 32,
-              int preWhite = 0) {
+void ShowData(char const *data, uint64_t len, int width = 32, int preWhite = 0,
+              uint32_t divisionHeight = (uint32_t)-1, bool showAscii = true) {
     uint64_t dpos = 0;
+    uint32_t dDivide = divisionHeight;
+    uint32_t blockNum = 1;
     while (dpos < len) {
         for (int p = preWhite; p; p--) {
             std::cout << " ";
         }
-        for (int p = width; p; p--) {
-            if (dpos >= len) {
+        for (int p = 0; p < width; p++) {
+            if (dpos + p >= len) {
+                for (int o = (width - p) * 3; o; o--) {
+                    std::cout << " ";
+                }
                 break;
             }
             std::cout << std::uppercase << std::hex << std::setw(2)
-                      << std::setfill('0') << (uint32_t)(uint8_t)data[dpos++]
+                      << std::setfill('0') << (uint32_t)(uint8_t)data[dpos + p]
                       << " ";
         }
+        if (showAscii) {
+            std::cout << "    ";
+            for (int p = 0; p < width; p++) {
+                if (dpos + p >= len) {
+                    break;
+                }
+                if ((uint8_t)data[dpos + p] >= 0x20 &&
+                    (uint8_t)data[dpos + p] <= 0x7E) {
+                    std::cout << data[dpos + p];
+                }
+                else {
+                    std::cout << ".";
+                }
+            }
+        }
         std::cout << std::endl;
+        if (!(--dDivide)) {
+            for (int p = preWhite; p; p--) {
+                std::cout << " ";
+            }
+            std::cout << "Offset: 0x" << std::hex << std::uppercase
+                      << std::setw(8) << std::setfill('0') << dpos + width;
+            std::cout << "  BlockNumber: " << std::dec << blockNum;
+            std::cout << std::endl;
+            dDivide = divisionHeight;
+            blockNum++;
+        }
+        dpos += width;
     }
 }
 
@@ -127,7 +159,7 @@ void ShowVolumeInfo(tamper::Ntfs &disk) {
     std::cout << "  Logic cluster number of MFT: " << disk.bootInfo.LCNoVCN0oMFT
               << std::endl;
     // 获得 MFT Areas
-    auto secs = disk.MFT_FileRecord.GetDataAttr().attrData.sectors;
+    auto secs = disk.MFT_FileRecord.GetDataAttr()->attrData.sectors;
     std::cout << "MFT Areas:" << std::endl;
     for (auto &i : secs) {
         std::cout << "  start: " << std::dec << i.startSecId
@@ -160,49 +192,154 @@ void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx) {
     std::cout << std::endl;
 
     for (auto &o : rcd.attrs) {
+        tamper::NtfsAttr &oRef = *o.get();
         std::cout << "  attr type:" << std::hex << std::uppercase
-                  << o.fields.get()->attrType << std::endl;
+                  << oRef.GetAttributeType() << std::endl;
         std::cout << "    is non-resident: " << std::dec
-                  << (int)o.fields.get()->nonResident << std::endl;
-        std::cout << "    length: " << std::dec << o.fields.get()->length
+                  << (int)oRef.fields.get()->nonResident << std::endl;
+        std::cout << "    length: " << std::dec << oRef.GetAttributeLength()
                   << std::endl;
-        // std::cout << "    attr id: " << std::dec << o.fields.get()->attrId
-        //           << std::endl;
-        if (o.fields.get()->nameLen) {
-            std::cout << "    name: " << std::dec << wstr2str(o.attrName)
+        if (!oRef.attrName.empty()) {
+            std::cout << "    name: " << std::dec << wstr2str(oRef.attrName)
                       << std::endl;
         }
-        if (o.fields.get()->attrType == tamper::NTFS_FILE_NAME) {
-            tamper::TypeData_FILE_NAME fileInfo = o.attrData;
+        if (oRef.GetAttributeType() == tamper::NTFS_FILE_NAME) {
+            tamper::TypeData_FILE_NAME fileInfo = oRef.attrData;
             std::cout << "    flags: " << std::hex << fileInfo.fileInfo.flags
                       << std::endl;
         }
-        if (o.fields.get()->nonResident) {
-            tamper::NtfsAttr::NonResidentPart &nonResidentPart =
-                (tamper::NtfsAttr::NonResidentPart &)*o.fields.get();
-            std::cout << "    Virtual Clusters count: "
-                      << nonResidentPart.VCN_end - nonResidentPart.VCN_beg + 1
+        if (oRef.GetAttributeType() == tamper::NTFS_INDEX_ROOT) {
+            tamper::TypeData_INDEX_ROOT indexRoot = oRef.attrData;
+            std::cout << "    indexed Attribute Type: " << std::hex
+                      << std::uppercase << indexRoot.rootInfo.attrType
                       << std::endl;
+            std::cout << "    size of Index Block: " << std::dec
+                      << indexRoot.rootInfo.sizeofIB << std::endl;
+            std::cout << "    type of the Index:";
+            if (indexRoot.indexHeader.flags ==
+                indexRoot.HEADER_FLAG_SMALL_INDEX) {
+                std::cout << " SMALL_INDEX";
+            }
+            else if (indexRoot.indexHeader.flags ==
+                     indexRoot.HEADER_FLAG_LARGE_INDEX)
+                std::cout << " LARGE_INDEX";
+            else
+                std::cout << " 0x" << std::hex << indexRoot.indexHeader.flags;
+            std::cout << std::endl;
+
+            std::cout << "    Entries: " << std::endl;
+            for (int i = 0; i < indexRoot.indexEntries.size(); i++) {
+                tamper::NtfsIndexEntry &entry = indexRoot.indexEntries[i];
+                std::cout << "      Entry [" << std::dec << i << "]"
+                          << std::endl;
+                std::cout << "        flags:";
+                if (entry.entryHeader.flags & entry.FLAG_IE_POINT_TO_SUBNODE) {
+                    std::cout << " POINT_TO_SUBNODE";
+                }
+                if (entry.entryHeader.flags &
+                    entry.FLAG_LAST_ENTRY_IN_THE_NODE) {
+                    std::cout << " LAST_ENTRY_IN_THE_NODE";
+                }
+                if (entry.entryHeader.flags == 0) std::cout << " None";
+                std::cout << std::endl;
+                std::cout << "        point to file record: " << std::dec
+                          << entry.entryHeader.fileReference.fileRecordNum
+                          << std::endl;
+                if (entry.streamType == tamper::NTFS_FILE_NAME) {
+                    tamper::TypeData_FILE_NAME pointed = entry.stream;
+                    if (pointed.filename.size())
+                        std::cout << "        point to Filename: "
+                                  << wstr2str(pointed.filename) << std::endl;
+                }
+                if (entry.stream.len()) {
+                    std::cout << "        stream data hex:" << std::endl;
+                    ShowData(entry.stream, entry.stream.len(), 16, 10);
+                }
+                if (indexRoot.indexHeader.flags ==
+                    indexRoot.HEADER_FLAG_LARGE_INDEX) {
+                    std::cout
+                        << "        point to Index Records number:" << std::dec
+                        << entry.pIndexRecordNumber << std::endl;
+                }
+            }
+        }
+        if (!oRef.IsResident()) {
+            std::cout << "    Virtual Clusters count: "
+                      << oRef.GetVirtualClusterCount() << std::endl;
             std::cout << "    data runs size: " << std::dec
-                      << FriendlyFileSize(
-                             disk.GetDataRunsDataSize(o, o.attrData.rawData))
+                      << FriendlyFileSize(disk.GetDataRunsDataSize(
+                             oRef, oRef.attrData.rawData))
                       << std::endl;
             std::cout << "    data runs: " << std::endl;
-            ShowData((tamper::NtfsDataBlock)o.attrData, o.attrData.len(), 16,
-                     6);
+            ShowData((tamper::NtfsDataBlock)oRef.attrData, oRef.attrData.len(),
+                     16, 6);
+        }
+        if (oRef.GetAttributeType() == tamper::NTFS_INDEX_ALLOCATION) {
+            tamper::TypeData_INDEX_ALLOCATION IA = oRef.attrData;
+            // std::cout << "    Raw Data:" << std::endl;
+            // ShowData(IA.rawIRsData,
+            // IA.rawIRsData.len(),
+            //         32, 6, 16, true);
+            std::cout << "    Index Records: " << std::endl;
+            for (int i = 0; i < IA.IRs.size(); i++) {
+                tamper::NtfsIndexRecord &IR = IA.IRs[i];
+                std::cout << "      IR [" << std::dec << i << "]" << std::endl;
+                if (!IR.valid) {
+                    std::cout << "        NOT VALID!!!" << std::endl;
+                    continue;
+                }
+                std::cout << "        is leaf node: " << std::boolalpha
+                          << !IR.indexRecordHeader.notLeafNode << std::endl;
+                std::cout << "        Index Entries:" << std::endl;
+                for (int p = 0; p < IR.IEs.size(); p++) {
+                    tamper::NtfsIndexEntry &entry = IR.IEs[p];
+                    std::cout << "          Entry [" << std::dec << p << "]"
+                              << std::endl;
+                    std::cout << "            flags:";
+                    if (entry.entryHeader.flags &
+                        entry.FLAG_IE_POINT_TO_SUBNODE) {
+                        std::cout << " POINT_TO_SUBNODE";
+                    }
+                    if (entry.entryHeader.flags &
+                        entry.FLAG_LAST_ENTRY_IN_THE_NODE) {
+                        std::cout << " LAST_ENTRY_IN_THE_NODE";
+                    }
+                    if (entry.entryHeader.flags == 0) std::cout << " None";
+                    std::cout << std::endl;
+                    std::cout
+                        << "            point to file record: " << std::dec
+                        << entry.entryHeader.fileReference.fileRecordNum
+                        << std::endl;
+                    if (!IR.indexRecordHeader.notLeafNode) {
+                        tamper::TypeData_FILE_NAME pointed = entry.stream;
+                        std::cout << "            point to Filename: "
+                                  << wstr2str(pointed.filename) << std::endl;
+                    }
+                    else {
+                        std::cout << "            stream data hex:"
+                                  << std::endl;
+                        ShowData(entry.stream, entry.stream.len(), 16, 14);
+                        std::cout
+                            << "            point to Index Records number: "
+                            << std::dec << entry.pIndexRecordNumber
+                            << std::endl;
+                    }
+                }
+            }
         }
     }
 }
 
 // 显示 文件记录 的 16 进制数据
-void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx) {
+void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx,
+                       uint32_t preSpace = 2) {
     uint64_t rcdIdx = idx;
     std::vector<tamper::SuccessiveSectors> area =
         disk.GetFileRecordAreaByIndex(rcdIdx);
     tamper::NtfsDataBlock block = disk.ReadSectors(area);
     tamper::Ntfs_FILE_Record trcd = block;
     std::vector<char> data = block;
-    ShowData(&data[0], data.size());
+    ShowData(&data[0], data.size(), 32, preSpace);
 }
 
 int main() {
