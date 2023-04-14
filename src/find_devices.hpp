@@ -43,7 +43,7 @@ namespace tamper {
                     //         strBuf[i] = '\n';
                     //     }
                     // }
-                    i.volumePath.assign(strBuf, retLen);
+                    i.volumePath = strBuf;
                 }
             }
         }
