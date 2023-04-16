@@ -60,6 +60,8 @@
         "deque": "cpp",
         "stack": "cpp",
         "chrono": "cpp",
-        "ratio": "cpp"
+        "ratio": "cpp",
+        "algorithm": "cpp",
+        "clocale": "cpp"
     }
 }

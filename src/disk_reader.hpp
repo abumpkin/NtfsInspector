@@ -11,10 +11,11 @@ namespace tamper {
     };
 
     class DiskReader {
-        HANDLE fh;
-        DWORD error;
+        const uint32_t MaxSectorSize = 4096;
+        HANDLE fh = INVALID_HANDLE_VALUE;
+        DWORD error = 0;
         DISK_SPACE_INFORMATION diskInfo;
-        char *sectorCache;
+        char *sectorCache = nullptr;
 
     private:
         struct SizeCompounds {
@@ -41,6 +42,7 @@ namespace tamper {
         DiskReader &operator=(DiskReader &&r) {
             this->~DiskReader();
             new (this) DiskReader(std::move(r));
+            return *this;
         }
 
         DiskReader(std::string file) : diskInfo{0} {
@@ -63,6 +65,8 @@ namespace tamper {
             if (sectorCache) {
                 delete[] sectorCache;
             }
+            fh = INVALID_HANDLE_VALUE;
+            sectorCache = nullptr;
         }
         bool IsOpen() const { return fh != INVALID_HANDLE_VALUE; }
         uint32_t GetSectorSize() const { return diskInfo.BytesPerSector; }
@@ -112,28 +116,13 @@ namespace tamper {
             return wd;
         }
         std::vector<char> ReadSectors(uint64_t secId, uint64_t secNum) {
-            // std::vector<char> ret, t;
-            // uint64_t pos;
-            // try {
-            //     for (int i = secId; i < secId + secNum; i++) {
-            //         t = ReadSector(i);
-            //         if (t.size()) {
-            //             pos = ret.size();
-            //             ret.resize(ret.size() + t.size());
-            //             memcpy_s(&ret[pos], t.size(), t.data(), t.size());
-            //         }
-            //     }
-            //     return ret;
-            // }
-            // catch (std::exception &e) {
-            //     throw e;
-            // }
             char *(&data) = sectorCache;
             DWORD rd;
             std::vector<char> ret;
             SizeCompounds pos;
             ((uint64_t &)pos) = (uint64_t)GetSectorSize() * secId;
-            if (fh == INVALID_HANDLE_VALUE || diskInfo.BytesPerSector == 0) {
+            if (fh == INVALID_HANDLE_VALUE || diskInfo.BytesPerSector == 0 ||
+                diskInfo.BytesPerSector > MaxSectorSize) {
                 throw std::runtime_error("fail");
             }
             SetFilePointer(fh, pos.l, (PLONG)&pos.h, FILE_BEGIN);
