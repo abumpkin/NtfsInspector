@@ -43,5 +43,5 @@ ColumnLimit:	80,
 # 允许重新排版注释
 ReflowComments:	true,
 # 允许排序#include
-SortIncludes:	true,
+SortIncludes:	false,
 }

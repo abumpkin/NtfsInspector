@@ -98,7 +98,7 @@ std::string NtfsTime(uint64_t time) {
     std::tm emptyTm = {0, 0, 0, 1, 0, -299};
     std::string ret;
     if (nullptr == ptm) ptm = &emptyTm;
-    std::strftime(timeStr, 50, "UTC %F T%T %z", ptm);
+    std::strftime(timeStr, 50, "%F T%T %z", ptm);
     ret = timeStr;
     return ret;
 }

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace tamper {
+namespace abkntfs {
     struct SuccessiveSectors {
         uint64_t startSecId;
         uint64_t secNum;
@@ -107,8 +107,10 @@ namespace tamper {
             }
             SetFilePointer(fh, pos.l, (PLONG)&pos.h, FILE_BEGIN);
             // 锁定卷
-            DeviceIoControl(fh, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &stat,
-                            NULL);
+            if (!DeviceIoControl(fh, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &stat,
+                                 NULL)) {
+                return 0;
+            }
             WriteFile(fh, data.data(), GetSectorSize(), &wd, NULL);
             // 解锁
             DeviceIoControl(fh, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &stat,

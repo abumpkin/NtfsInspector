@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace tamper {
+namespace abkntfs {
     class Devices {
         struct dev {
             std::string guidPath;

@@ -1,7 +1,7 @@
-#include "disk_reader.hpp"
 #include "find_devices.hpp"
 #include "my_utilities.hpp"
 #include "ntfs_access.hpp"
+#include "ntfs_app_UsnJrnl.hpp"
 #include <chrono>
 #include <codecvt>
 #include <ctime>
@@ -13,8 +13,8 @@
 #include <string>
 
 // 加载卷
-tamper::Ntfs LoadVolume() {
-    tamper::Devices devs;
+abkntfs::Ntfs LoadVolume() {
+    abkntfs::Devices devs;
     int vol_i = 0;
     // 展示设备
     for (auto i : devs.devs) {
@@ -48,10 +48,10 @@ tamper::Ntfs LoadVolume() {
 
     std::vector<char> data;
 
-    return tamper::Ntfs{volumePath};
+    return abkntfs::Ntfs{volumePath};
 }
 
-void ShowSecsInfo(tamper::NtfsSectorsInfo secs) {
+void ShowSecsInfo(abkntfs::NtfsSectorsInfo secs) {
     for (auto &i : secs) {
         std::cout << "  起始扇区号: " << std::dec << i.startSecId
                   << "\t扇区数量: " << i.secNum
@@ -61,7 +61,7 @@ void ShowSecsInfo(tamper::NtfsSectorsInfo secs) {
 }
 
 // 显示卷信息
-void ShowVolumeInfo(tamper::Ntfs &disk) {
+void ShowVolumeInfo(abkntfs::Ntfs &disk) {
     std::cout << "卷总大小: " << std::dec
               << FriendlyFileSize(disk.GetTotalSize()) << std::endl;
     // 输出 $Boot 信息
@@ -75,13 +75,13 @@ void ShowVolumeInfo(tamper::Ntfs &disk) {
     std::cout << "  扇区总数: " << std::dec << disk.bootInfo.numberOfSectors
               << std::endl;
     // 获得 MFT Areas
-    auto secs = disk.MFT_FileRecord.FindSpecAttr(tamper::NTFS_DATA)
+    auto secs = disk.MFT_FileRecord.FindSpecAttr(abkntfs::NTFS_DATA)
                     ->attrData.dataRunsMap;
     std::cout << "MFT 占用的扇区信息:" << std::endl;
     ShowSecsInfo(secs);
 }
 
-void ShowStandardInfo(tamper::TypeData_STANDARD_INFOMATION &info,
+void ShowStandardInfo(abkntfs::AttrData_STANDARD_INFOMATION &info,
                       uint32_t preSpace = 0) {
     if (!info.valid) {
         return;
@@ -98,7 +98,7 @@ void ShowStandardInfo(tamper::TypeData_STANDARD_INFOMATION &info,
               << info.extraInfo.USN << std::endl;
 }
 
-void ShowAttrList(tamper::TypeData_ATTRIBUTE_LIST &info,
+void ShowAttrList(abkntfs::AttrData_ATTRIBUTE_LIST &info,
                   uint32_t preSpace = 0) {
     if (!info.valid) {
         return;
@@ -124,62 +124,63 @@ void ShowAttrList(tamper::TypeData_ATTRIBUTE_LIST &info,
 
 void ShowAttributesFlag(uint32_t flags, uint32_t preSpace = 0) {
     std::cout << ssp{preSpace} << "标志:";
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_NORMAL) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_NORMAL) {
         std::cout << " 正常";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_READ_ONLY) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_READ_ONLY) {
         std::cout << " 只读";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_HIDDEN) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_HIDDEN) {
         std::cout << " 隐藏";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_ARCHIVE) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_ARCHIVE) {
         std::cout << " 文档";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_DIRECTORY) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_DIRECTORY) {
         std::cout << " 目录";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_SYSTEM) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_SYSTEM) {
         std::cout << " 系统文件";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_TEMPORARY) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_TEMPORARY) {
         std::cout << " 临时文件";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_DEVICE) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_DEVICE) {
         std::cout << " 设备文件";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_INDEX_VIEW) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_INDEX_VIEW) {
         std::cout << " 索引视图文件";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_COMPRESSED) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_COMPRESSED) {
         std::cout << " 压缩";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_ENCRYPTED) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_ENCRYPTED) {
         std::cout << " 加密";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_SPARSE_FILE) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_SPARSE_FILE) {
         std::cout << " 稀疏";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_NOT_CONTENT_INDEXED) {
-        std::cout << " 没有被索引";
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_NOT_CONTENT_INDEXED) {
+        std::cout << " 非内容索引";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_REPARSE_POINT) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_REPARSE_POINT) {
         std::cout << " 重解析点";
     }
-    if (flags & tamper::TypeData_FILE_NAME::FILE_FLAG_OFFLINE) {
+    if (flags & abkntfs::AttrData_FILE_NAME::FILE_FLAG_OFFLINE) {
         std::cout << " 脱机";
     }
     if (flags == 0) {
-        std::cout << " 没有";
+        std::cout << " 无";
     }
     std::cout << std::endl;
 }
 
-void ShowFileName(tamper::TypeData_FILE_NAME &fileName, uint32_t preSpace = 0) {
+void ShowFileName(abkntfs::AttrData_FILE_NAME &fileName,
+                  uint32_t preSpace = 0) {
     if (!fileName.valid) {
         return;
     }
-    ShowAttributesFlag(fileName.fileInfo.flags, 2);
+    ShowAttributesFlag(fileName.fileInfo.flags, preSpace);
     std::cout << ssp{preSpace} << "文件名: " << wstr2str(fileName.filename)
               << std::endl;
     // 似乎总是 0
@@ -202,10 +203,10 @@ void ShowFileName(tamper::TypeData_FILE_NAME &fileName, uint32_t preSpace = 0) {
               << fileName.fileInfo.fileRef.fileRecordNum << std::endl;
 }
 
-void ShowIndexEntries(const std::vector<tamper::NtfsIndexEntry> &entries,
+void ShowIndexEntries(const std::vector<abkntfs::NtfsIndexEntry> &entries,
                       uint32_t preSpace = 0) {
     for (int i = 0; i < entries.size(); i++) {
-        const tamper::NtfsIndexEntry &entry = entries[i];
+        const abkntfs::NtfsIndexEntry &entry = entries[i];
         std::cout << ssp{preSpace} << "索引项 [" << std::dec << i << "]"
                   << std::endl;
         std::cout << ssp{preSpace + 2} << "标志:";
@@ -219,10 +220,10 @@ void ShowIndexEntries(const std::vector<tamper::NtfsIndexEntry> &entries,
         std::cout << std::endl;
         std::cout << ssp{preSpace + 2} << "指向的文件记录号: " << std::dec
                   << entry.entryHeader.fileReference.fileRecordNum << std::endl;
-        if (entry.streamType == tamper::NTFS_FILE_NAME && entry.stream.len()) {
+        if (entry.streamType == abkntfs::NTFS_FILE_NAME && entry.stream.len()) {
             std::cout << ssp{preSpace + 2}
                       << "所指向文件的文件名属性($FILE_NAME)信息:" << std::endl;
-            tamper::TypeData_FILE_NAME pointed = entry.stream;
+            abkntfs::AttrData_FILE_NAME pointed = entry.stream;
             ShowFileName(pointed, preSpace + 4);
         }
         if (entry.entryHeader.flags & entry.FLAG_IE_POINT_TO_SUBNODE) {
@@ -233,7 +234,7 @@ void ShowIndexEntries(const std::vector<tamper::NtfsIndexEntry> &entries,
     }
 }
 
-void ShowIndexRoot(tamper::TypeData_INDEX_ROOT &info, uint32_t preSpace = 0) {
+void ShowIndexRoot(abkntfs::AttrData_INDEX_ROOT &info, uint32_t preSpace = 0) {
     if (!info.valid) {
         return;
     }
@@ -255,14 +256,14 @@ void ShowIndexRoot(tamper::TypeData_INDEX_ROOT &info, uint32_t preSpace = 0) {
     ShowIndexEntries(info.rootNode.IEs, preSpace + 2);
 }
 
-void ShowIndexAlloc(tamper::TypeData_INDEX_ALLOCATION &info,
+void ShowIndexAlloc(abkntfs::AttrData_INDEX_ALLOCATION &info,
                     uint32_t preSpace = 0) {
     if (!info.valid) {
         return;
     }
     std::cout << ssp{preSpace} << "所有索引记录: " << std::endl;
-    for (int i = 0; i < info.IRs.size(); i++) {
-        tamper::NtfsIndexRecord &IR = info.IRs[i];
+    for (int i = 0; i < info.GetIRs().size(); i++) {
+        abkntfs::NtfsIndexRecord &IR = info.GetIRs()[i];
         std::cout << ssp{preSpace + 2} << "索引记录 [" << std::dec << i << "]";
         if (!IR.valid) {
             std::cout << "\t无效索引记录!!!" << std::endl;
@@ -274,7 +275,7 @@ void ShowIndexAlloc(tamper::TypeData_INDEX_ALLOCATION &info,
     }
 }
 
-void ShowAttrInfo(tamper::NtfsAttr &attr, uint32_t preSpace = 0) {
+void ShowAttrInfo(abkntfs::NtfsAttr &attr, uint32_t preSpace = 0) {
     bool flag = true;
     std::cout << ssp{preSpace} << "属性类型: 0x" << std::hex << std::uppercase
               << attr.GetAttributeType();
@@ -288,19 +289,19 @@ void ShowAttrInfo(tamper::NtfsAttr &attr, uint32_t preSpace = 0) {
         std::cout << ssp{preSpace + 2} << "属性名称: " << std::dec
                   << wstr2str(attr.attrName) << std::endl;
     }
-    if (attr.GetAttributeType() == tamper::NTFS_STANDARD_INFOMATION) {
+    if (attr.GetAttributeType() == abkntfs::NTFS_STANDARD_INFOMATION) {
         ShowStandardInfo(attr.attrData, preSpace + 2);
         flag = false;
     }
-    if (attr.GetAttributeType() == tamper::NTFS_ATTRIBUTE_LIST) {
+    if (attr.GetAttributeType() == abkntfs::NTFS_ATTRIBUTE_LIST) {
         ShowAttrList(attr.attrData, preSpace + 2);
         flag = false;
     }
-    if (attr.GetAttributeType() == tamper::NTFS_FILE_NAME) {
+    if (attr.GetAttributeType() == abkntfs::NTFS_FILE_NAME) {
         ShowFileName(attr.attrData, preSpace + 2);
         flag = false;
     }
-    if (attr.GetAttributeType() == tamper::NTFS_INDEX_ROOT) {
+    if (attr.GetAttributeType() == abkntfs::NTFS_INDEX_ROOT) {
         ShowIndexRoot(attr.attrData, preSpace + 2);
         flag = false;
     }
@@ -308,9 +309,9 @@ void ShowAttrInfo(tamper::NtfsAttr &attr, uint32_t preSpace = 0) {
         std::cout << ssp{preSpace + 2}
                   << "虚拟簇号(Virtual Cluster Number)数量: "
                   << attr.GetVirtualClusterCount() << std::endl;
-        uint64_t allocSize =
-            static_cast<tamper::NtfsAttr::NonResidentPart &>(*attr.fields.get())
-                .allocSize;
+        uint64_t allocSize = static_cast<abkntfs::NtfsAttr::NonResidentPart &>(
+                                 *attr.fields.get())
+                                 .allocSize;
         uint64_t realSize = attr.GetDataSize();
         std::cout << ssp{preSpace + 2}
                   << "数据流(data runs) 对应数据的分配大小(字节): " << std::dec
@@ -324,20 +325,20 @@ void ShowAttrInfo(tamper::NtfsAttr &attr, uint32_t preSpace = 0) {
 
         std::cout << ssp{preSpace + 2}
                   << "数据流(data runs) 二进制数据: " << std::endl;
-        ShowHex((tamper::NtfsDataBlock)attr.attrData, attr.attrData.len(), 16,
+        ShowHex((abkntfs::NtfsDataBlock)attr.attrData, attr.attrData.len(), 16,
                 preSpace + 4);
         flag = false;
     }
-    else if (attr.GetAttributeType() == tamper::NTFS_DATA) {
+    else if (attr.GetAttributeType() == abkntfs::NTFS_DATA) {
         std::cout << ssp{preSpace + 2}
                   << "驻留数据大小: " << FriendlyFileSize(attr.GetDataSize())
                   << std::endl;
         std::cout << ssp{preSpace + 2} << "驻留数据:" << std::endl;
-        ShowHex((tamper::NtfsDataBlock)attr.attrData, attr.attrData.len(), 16,
+        ShowHex((abkntfs::NtfsDataBlock)attr.attrData, attr.attrData.len(), 16,
                 preSpace + 4);
         flag = false;
     }
-    if (attr.GetAttributeType() == tamper::NTFS_INDEX_ALLOCATION) {
+    if (attr.GetAttributeType() == abkntfs::NTFS_INDEX_ALLOCATION) {
         // ShowIndexAlloc(attr.attrData, preSpace + 2);
         flag = false;
     }
@@ -349,9 +350,9 @@ void ShowAttrInfo(tamper::NtfsAttr &attr, uint32_t preSpace = 0) {
 }
 
 // 显示 文件记录 详细信息
-void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx,
+void ShowFileRecordInfo(abkntfs::Ntfs &disk, uint64_t idx,
                         uint32_t preSpace = 0) {
-    tamper::NtfsFileRecord rcd = disk.GetFileRecordByFRN(idx);
+    abkntfs::NtfsFileRecord rcd = disk.GetFileRecordByFRN(idx);
     std::string filename = wstr2str(rcd.GetFileName());
     std::cout << ssp{preSpace} << "文件记录 [" << std::dec << idx << "]"
               << std::endl;
@@ -390,20 +391,20 @@ void ShowFileRecordInfo(tamper::Ntfs &disk, uint64_t idx,
 
     std::cout << ssp{preSpace} << "  所有属性:" << std::endl;
     for (auto &o : rcd.attrs) {
-        tamper::NtfsAttr &oRef = *o.get();
+        abkntfs::NtfsAttr &oRef = *o.get();
         ShowAttrInfo(oRef, 6 + preSpace);
     }
 }
 
 // 显示文件夹文件
-void ShowDirFiles(tamper::NtfsFileRecord rcd) {
-    tamper::NtfsFileNameIndex index = rcd;
+void ShowDirFiles(abkntfs::NtfsFileRecord rcd) {
+    abkntfs::NtfsFileNameIndex index = rcd;
     if (index.valid) {
         std::cout << std::endl;
         std::cout << "文件夹内容:" << std::endl;
         uint64_t number = 1;
         auto showFile =
-            [&](tamper::NtfsFileNameIndex::FileInfoInIndex info) -> bool {
+            [&](abkntfs::NtfsFileNameIndex::FileInfoInIndex info) -> bool {
             std::cout << std::left << std::setfill(' ') << std::setw(8)
                       << "  [" + std::to_string(number++) + "]";
             std::cout << std::left << std::setfill(' ') << std::setw(40)
@@ -421,12 +422,12 @@ void ShowDirFiles(tamper::NtfsFileRecord rcd) {
 }
 
 // 显示 文件记录 的 16 进制数据
-void ShowFileRecordHex(tamper::Ntfs &disk, uint64_t idx,
+void ShowFileRecordHex(abkntfs::Ntfs &disk, uint64_t idx,
                        uint32_t preSpace = 2) {
     uint64_t rcdIdx = idx;
-    tamper::NtfsSectorsInfo area = disk.GetFileRecordAreaByFRN(rcdIdx);
-    tamper::NtfsDataBlock block = disk.ReadSectors(area);
-    tamper::NtfsFileRecord trcd = tamper::NtfsFileRecord{block, idx};
+    abkntfs::NtfsSectorsInfo area = disk.GetFileRecordAreaByFRN(rcdIdx);
+    abkntfs::NtfsDataBlock block = disk.ReadSectors(area);
+    abkntfs::NtfsFileRecord trcd = abkntfs::NtfsFileRecord{block, idx};
     if (trcd.valid) {
         std::vector<char> data = block;
         ShowHex(&data[0], data.size(), 32, preSpace);
@@ -482,6 +483,8 @@ private:
         Exists<uint64_t> FRN;
         // 打印指定扇区
         Exists<uint64_t> sectorId;
+        // 打印指定簇号
+        Exists<uint64_t> clusterId;
         // 是否十六进制显示
         bool hex = false;
         // 显示目录文件
@@ -492,11 +495,13 @@ private:
         bool info = false;
         // 打印指定属性
         Exists<uint64_t> attrId;
+        // 打印一个空闲位置
+        Exists<uint64_t> freeUnit;
     };
 
 public:
-    tamper::Ntfs disk;
-    CommandParser(tamper::Ntfs &disk) { this->disk = std::move(disk); };
+    abkntfs::Ntfs disk;
+    CommandParser(abkntfs::Ntfs &disk) { this->disk = std::move(disk); };
     void Parse(std::string cmd) {
         std::string param = PopParameter(cmd);
         if (compareStrNoCase(param, "p")) {
@@ -508,6 +513,9 @@ public:
                 }
                 if (compareStrNoCase(param, "sec")) {
                     ps.sectorId = ToUll(PopParameter(cmd));
+                }
+                if (compareStrNoCase(param, "clu")) {
+                    ps.clusterId = ToUll(PopParameter(cmd));
                 }
                 if (compareStrNoCase(param, "hex")) {
                     ps.hex = true;
@@ -527,6 +535,9 @@ public:
                 if (compareStrNoCase(param, "attrid")) {
                     ps.attrId = ToUll(PopParameter(cmd));
                 }
+                if (compareStrNoCase(param, "free")) {
+                    ps.freeUnit = ToUll(PopParameter(cmd));
+                }
             }
             Print(ps);
         }
@@ -536,8 +547,8 @@ public:
         bool flag = false;
         if (ps.FRN.ex()) {
             if (ps.attrId.ex()) {
-                tamper::NtfsFileRecord t = disk.GetFileRecordByFRN(ps.FRN);
-                tamper::NtfsAttr *pAttr = t.GetSpecAttr(ps.attrId);
+                abkntfs::NtfsFileRecord t = disk.GetFileRecordByFRN(ps.FRN);
+                abkntfs::NtfsAttr *pAttr = t.GetSpecAttr(ps.attrId);
                 if (nullptr == pAttr) {
                     std::cout << "无此属性." << std::endl;
                     return;
@@ -561,31 +572,111 @@ public:
             else if (ps.hex) {
                 ShowFileRecordHex(disk, ps.FRN);
             }
+            else if (ps.freeUnit.ex()) {
+                abkntfs::NtfsFileRecord t = disk.GetFileRecordByFRN(ps.FRN);
+                abkntfs::NtfsAttr *td = t.FindSpecAttr(abkntfs::NTFS_BITMAP);
+                if (nullptr == td) {
+                    return;
+                }
+                abkntfs::TypeData_BITMAP bm;
+                bm = {td->ReadAttrRawRealData(0, td->GetDataSize(), &disk),
+                      abkntfs::TypeData_BITMAP::UNIT_RECORD};
+                std::cout << "  自由空间单元: " << bm.FindFreeUnitPos()
+                          << std::endl;
+            }
             else {
                 ShowFileRecordInfo(disk, ps.FRN);
             }
             flag = true;
         }
+        else if (ps.freeUnit.ex()) {
+            abkntfs::NtfsFileRecord t = disk.GetFileRecordByFRN(6);
+            abkntfs::NtfsAttr *td = t.FindSpecAttr(abkntfs::NTFS_DATA, L"");
+            if (nullptr == td) {
+                return;
+            }
+            abkntfs::TypeData_BITMAP bm;
+            bm = {td->ReadAttrRawRealData(0, td->GetDataSize(), &disk),
+                  abkntfs::TypeData_BITMAP::UNIT_RECORD};
+            uint64_t fi = bm.FindFreeUnitPos();
+            if (fi != (uint64_t)-1) {
+                std::cout << "  自由空间单元: " << fi << std::endl;
+            }
+            flag = true;
+        }
         else if (ps.logJn.ex()) {
-            tamper::NtfsUsnJrnl logJ{disk};
+            abkntfs::NtfsUsnJrnl logJ{disk};
             auto logRecs = logJ.GetLastN(ps.logJn);
             for (auto &i : logRecs) {
-                std::cout << "[USN " << std::dec << i.fixed.offInJ << "]"
-                          << " 文件名: " << wstr2str(i.fileName) << std::endl;
+                std::cout << "[USN " << std::dec << i.fixed.offInJ << "]";
+                std::cout << ssp{0} << "[" << NtfsTime(i.fixed.time) << "]";
+                std::cout << ssp{0} << "[FRN " << std::dec
+                          << i.fixed.fileRef.fileRecordNum << "]";
+                std::cout << "[" << wstr2str(i.fileName) << "]";
+                std::cout << ssp{0} << "[";
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_OR_DIRECTORY_WAS_CREATED) {
+                    std::cout << " 文件创建";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_OR_DIRECTORY_WAS_DELETED) {
+                    std::cout << " 文件删除";
+                }
+                if (i.fixed.reason & abkntfs::NtfsUsnJrnl::FILE_CLOSED) {
+                    std::cout << " 文件被关闭";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_OR_DIRECTORY_RENAMED_NEW) {
+                    std::cout << " 重命名(显示新名)";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_OR_DIRECTORY_RENAMED_OLD) {
+                    std::cout << " 重命名(显示旧名)";
+                }
+                if (i.fixed.reason &
+                    (abkntfs::NtfsUsnJrnl::UNNAMED_DATA_STREAM_WAS_ADDED |
+                     abkntfs::NtfsUsnJrnl::UNNAMED_DATA_STREAM_WAS_OVERWRITTEN |
+                     abkntfs::NtfsUsnJrnl::UNNAMED_DATA_STREAM_WAS_TRUNCATED)) {
+                    std::cout << " 内容被修改";
+                }
+                if (i.fixed.reason & abkntfs::NtfsUsnJrnl::FILE_ATTR_CHANGED) {
+                    std::cout << " 属性改变";
+                }
+                if (i.fixed.reason &
+                    (abkntfs::NtfsUsnJrnl::NAMED_DATA_STREAM_WAS_ADDED |
+                     abkntfs::NtfsUsnJrnl::NAMED_DATA_STREAM_WAS_OVERWRITTEN |
+                     abkntfs::NtfsUsnJrnl::NAMED_DATA_STREAM_WAS_TRUNCATED)) {
+                    std::cout << " 额外内容被修改";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::ACCESS_RIGHTS_CHANGED) {
+                    std::cout << " 访问权限修改";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_COMPRESSED_CHANGED) {
+                    std::cout << " 压缩状态改变";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_ENCRYPTED_OR_DECRYPTED) {
+                    std::cout << " 加密状态改变";
+                }
+                if (i.fixed.reason &
+                    abkntfs::NtfsUsnJrnl::FILE_HARD_LINK_CHANGED) {
+                    std::cout << " 硬链接数量改变";
+                }
+                if (i.fixed.reason & abkntfs::NtfsUsnJrnl::FILE_OBJID_CHANGED) {
+                    std::cout << " 对象 ID 改变";
+                }
+                std::cout << "]" << std::endl;
                 ShowAttributesFlag(i.fixed.fileAttributes, 2);
-                std::cout << ssp{2} << "时间: " << NtfsTime(i.fixed.time)
-                          << std::endl;
-                std::cout << ssp{2} << "文件记录号: " << std::dec
-                          << i.fixed.fileRef.fileRecordNum << std::endl;
-                tamper::NtfsFileRecord t =
+                abkntfs::NtfsFileRecord t =
                     disk.GetFileRecordByFRN(i.fixed.fileRef.fileRecordNum);
                 std::cout << ssp{2}
                           << "所在目录: " << wstr2str(disk.GetFilePath(t))
                           << std::endl;
-                std::cout << ssp{2} << "原因: " << std::dec << i.fixed.reason
-                          << std::endl;
-                std::cout << ssp{2} << "源信息: " << std::dec
-                          << i.fixed.sourceInfo << std::endl;
+
+                // std::cout << ssp{2} << "源信息: " << std::dec
+                //           << i.fixed.sourceInfo << std::endl;
             }
             flag = true;
         }
@@ -597,6 +688,22 @@ public:
             }
             auto data = disk.ReadSector(ps.sectorId);
             ShowHex(data.data(), data.size(), 16, 4);
+            flag = true;
+        }
+        else if (ps.clusterId.ex()) {
+            if (ps.clusterId > disk.bootInfo.numberOfSectors /
+                                   disk.bootInfo.sectorsPerCluster) {
+                std::cout << "最大扇区号: " << std::dec
+                          << disk.bootInfo.numberOfSectors /
+                                     disk.bootInfo.sectorsPerCluster -
+                                 1
+                          << std::endl;
+                return;
+            }
+            auto data = disk.DiskReader::ReadSectors(
+                ps.clusterId * disk.bootInfo.sectorsPerCluster,
+                disk.bootInfo.sectorsPerCluster);
+            ShowHex(data.data(), data.size(), 32, 4);
             flag = true;
         }
         else if (ps.info) {
@@ -612,7 +719,7 @@ public:
 
 int main() {
     // 选择并加载卷
-    tamper::Ntfs disk = LoadVolume();
+    abkntfs::Ntfs disk = LoadVolume();
     // tamper::Ntfs disk2 = std::move(disk);
     int choose = 0;
 

@@ -63,5 +63,9 @@
         "ratio": "cpp",
         "algorithm": "cpp",
         "clocale": "cpp"
-    }
+    },
+    "cSpell.words": [
+        "abkntfs",
+        "devs"
+    ]
 }
