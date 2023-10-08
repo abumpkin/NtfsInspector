@@ -120,7 +120,7 @@ void ShowHex(char const *data, uint64_t len, int width = 32, int preWhite = 0,
                 }
                 break;
             }
-            std::cout << std::uppercase << std::hex << std::setw(2)
+            std::cout << std::uppercase << std::hex << std::setw(2) << std::right
                       << std::setfill('0') << (uint32_t)(uint8_t)data[dpos + p]
                       << " ";
         }
